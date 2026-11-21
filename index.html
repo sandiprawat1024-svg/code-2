@@ -92,7 +92,7 @@ window.lucide=(function(){const I={"camera": "<path d=\"M13.997 4a2 2 0 0 1 1.76
     <div id="idle" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500 text-center px-6">
       <i data-lucide="scan-line" class="w-10 h-10 mb-2 opacity-60"></i>
       <p class="text-sm font-bold">Scan ke liye ready</p>
-      <p id="no-data-hint" class="hidden text-xs mt-1 text-rose-600 font-semibold">Pehle "File" tab me Offline Pack (.json) load karo</p>
+      <p id="no-data-hint" class="hidden text-xs mt-1 text-rose-600 font-semibold">Pehle "File" tab me Offline Pack (.json) se Stock Update karo</p>
     </div>
   </div>
 </section>
@@ -102,15 +102,15 @@ window.lucide=(function(){const I={"camera": "<path d=\"M13.997 4a2 2 0 0 1 1.76
   <div class="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
     <h2 class="font-extrabold text-base">Data File Upload</h2>
     <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-900 leading-relaxed">
-      <b>Offline Pack (.json)</b>: image + naam + category + price sab ek file me. Ek baar "Upload &amp; Replace" se load karo, phir internet ki zarurat nahi.<br>
+      <b>Offline Pack (.json)</b>: image + naam + category + price sab ek file me. Naya stock aane par PC par <b>update_stock.bat</b> chalao, nayi pack yahan <b>Stock Update</b> se daalo: naye jud jayenge, bik chuke hat jayenge.<br>
       <b>CSV / TXT</b> bhi chalegi (CSV ke photo preview ke liye internet lagega).<br>
       Same number ki multiple images ek hi result me group hoti hain.
     </div>
     <input id="f-replace" type="file" accept=".json,.txt,.csv,application/json,text/plain,text/csv" class="hidden" onchange="handleFile(event,'REPLACE')" />
     <input id="f-append" type="file" accept=".json,.txt,.csv,application/json,text/plain,text/csv" class="hidden" onchange="handleFile(event,'APPEND')" />
     <div class="grid grid-cols-2 gap-2">
-      <button onclick="document.getElementById('f-replace').click()" class="py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold">Upload & Replace</button>
-      <button onclick="document.getElementById('f-append').click()" class="py-3 rounded-xl bg-emerald-600 text-white text-sm font-bold">Append (Add More)</button>
+      <button onclick="document.getElementById('f-replace').click()" class="py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold">Stock Update (Replace)</button>
+      <button onclick="document.getElementById('f-append').click()" class="py-3 rounded-xl bg-emerald-600 text-white text-sm font-bold">Sirf Naye Jodo (Append)</button>
     </div>
     <div id="upload-status" class="hidden rounded-xl p-3 bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-800"></div>
   </div>
@@ -386,7 +386,7 @@ function slideOut(el,toRight){
 }
 
 async function markAsShot(code){
-  const rec=parseRecord(code); if(!rec) return;
+  const rec=parseRecord(code); if(!rec) return; rec.local=true;
   await dbPut('records',rec); await refresh();
   toast(`"${rec.raw}" list me add ho gaya`,'ok');
   const m=match(code);
@@ -518,27 +518,60 @@ window.addEventListener('keydown',e=>{
 /* ============ FILE UPLOAD / SAMPLE / EXPORT ============ */
 async function handleFile(ev,mode){
   const f=ev.target.files?.[0]; if(!f) return;
-  const text=await f.text();
+  const input=ev.target;
+  const box=document.getElementById('upload-status'); box.classList.remove('hidden'); box.style.whiteSpace='pre-line'; box.textContent='File padh raha hai...';
+  let text; try{ text=await f.text(); }catch(e){ toast('File khul nahi payi','err'); input.value=''; return; }
   let parsed=[], isPack=false;
   if(/\.json$/i.test(f.name)||/^\s*\{\s*"v"/.test(text.slice(0,40))){
-    try{ parsed=parsePack(JSON.parse(text)); isPack=true; }catch(e){ toast('Pack file kharab hai: '+e.message,'err'); ev.target.value=''; return; }
+    try{ parsed=parsePack(JSON.parse(text)); isPack=true; }catch(e){ toast('Pack file kharab hai: '+e.message,'err'); box.classList.add('hidden'); input.value=''; return; }
   } else parsed=parseFileText(text, f.name);
-  if(!parsed.length){ toast('Koi valid line nahi mili','err'); ev.target.value=''; return; }
+  if(!parsed.length){ toast('Koi valid line nahi mili','err'); box.classList.add('hidden'); input.value=''; return; }
   const uniq=new Map(); parsed.forEach(r=>uniq.set(r.uid,r));
   const list=[...uniq.values()];
-  const box=document.getElementById('upload-status'); box.classList.remove('hidden'); box.textContent='Save ho raha hai...';
-  if(mode==='REPLACE') await dbClear('records');
-  await dbBatch('records',list); await refresh();
-  const withImg=list.filter(r=>r.img||r.imageUrl).length;
-  box.textContent=`${list.length.toLocaleString()} records load hue (${withImg.toLocaleString()} me image${isPack?' - OFFLINE':''}). Total: ${records.length.toLocaleString()} • Unique numbers: ${groupMap.size.toLocaleString()}`;
-  toast(isPack?'Offline pack save ho gaya - ab internet nahi chahiye':'File save ho gayi','ok'); ev.target.value='';
+  input.value='';
+  const apply=async()=>{
+    box.textContent='Save ho raha hai...';
+    const keyOf=r=>r.raw.toUpperCase();
+    const oldKeys=new Set(records.map(keyOf)), newKeys=new Set(list.map(keyOf));
+    const added=[...newKeys].filter(k=>!oldKeys.has(k)).sort();
+    let removed=[], kept=[];
+    if(mode==='REPLACE'){
+      const newDigits=new Set(list.map(r=>r.digitsOnly));
+      // photo kheench kar "list me add karo" wale piece: jab tak sheet/pack me nahi aate, rakhe jayenge
+      kept=records.filter(r=>r.local&&!newDigits.has(r.digitsOnly));
+      const keptKeys=new Set(kept.map(keyOf));
+      removed=[...oldKeys].filter(k=>!newKeys.has(k)&&!keptKeys.has(k)).sort();
+      await dbClear('records');
+      await dbBatch('records',list.concat(kept));
+    } else {
+      await dbBatch('records',list);
+    }
+    await refresh();
+    const withImg=list.filter(r=>r.img||r.imageUrl).length;
+    const names=(arr,sign)=>arr.length?'\n'+arr.slice(0,12).map(n=>sign+' '+n).join('\n')+(arr.length>12?`\n... aur ${arr.length-12}`:''):'';
+    let msg=`STOCK UPDATE HO GAYA${isPack?' (offline pack)':''}\nAb total: ${records.length.toLocaleString()} records • ${groupMap.size.toLocaleString()} unique numbers\nImage ke saath: ${withImg.toLocaleString()} / ${list.length.toLocaleString()}`;
+    if(oldKeys.size){
+      msg+=`\n\nNAYE: +${added.length.toLocaleString()}`+names(added,'+');
+      if(mode==='REPLACE') msg+=`\n\nHATE (stock out): -${removed.length.toLocaleString()}`+names(removed,'-');
+      if(kept.length) msg+=`\n\nLocal piece rakhe gaye (abhi sheet me nahi): ${kept.length}`;
+    }
+    box.textContent=msg;
+    toast(oldKeys.size?`+${added.length} naye${mode==='REPLACE'?`, -${removed.length} hate`:''}`:'Save ho gaya','ok');
+  };
+  const oldN=records.length;
+  if(mode==='REPLACE'&&oldN>=20&&list.length<oldN*0.5){
+    box.classList.add('hidden');
+    openModal('Pakka replace karna hai?',`Nayi file me sirf ${list.length.toLocaleString()} records hain, abhi ${oldN.toLocaleString()} hain. Galat file to nahi chuni?`,apply);
+  } else await apply();
 }
-// pack = {v:1, items:[{n:name, col:collection, cat:category, img:"data:image/jpeg;base64,..."}]}
+// pack = {v:2, items:[{n:name, id:driveId, col:collection, cat:category, img:"data:image/jpeg;base64,..."}]}
 function parsePack(p){
   if(!p||!Array.isArray(p.items)) throw new Error('items nahi mile');
-  const out=[];
-  p.items.forEach((it,i)=>{
-    const rec=parseRecord(it.n,{collection:it.col||'',category:(it.cat||'').toUpperCase(),img:it.img||'',uidKey:'P'+i});
+  const out=[], seen=new Map();
+  p.items.forEach(it=>{
+    const base=String(it.n||'').toUpperCase()+'|'+(it.id||'');
+    const n=seen.get(base)||0; seen.set(base,n+1);
+    const rec=parseRecord(it.n,{collection:it.col||'',category:(it.cat||'').toUpperCase(),img:it.img||'',uidKey:(it.id||'')+(n?'#'+n:'')});
     if(rec) out.push(rec);
   });
   return out;
