@@ -402,6 +402,7 @@ async function markAsShot(code){
    3) Match -> shown as soon as read twice. No match -> red only after ~0.5s of reads. */
 function onCamDecode(txt){
   txt=(txt||'').trim(); if(!txt) return;
+  if(activeTab!=='scan') return;   // doosre tab me camera chalu hai par scan result nahi aana chahiye
   if(Date.now()-lastResultAt<RESULT_GAP) return;
   if(!pend) pend={reads:{},ext:0,timer:setTimeout(finishPending,CONFIRM_MS)};
   pend.reads[txt]=(pend.reads[txt]||0)+1;
@@ -454,7 +455,13 @@ async function stopCamera(){
   document.getElementById('btn-torch').classList.add('hidden');
   document.getElementById('cam-ctrl').classList.add('hidden'); focusLocked=false; camAdv={};
 }
-function toggleCamera(){ camOn?stopCamera():startCamera(); }
+let userStopped=false, camBusy=false;
+function toggleCamera(){ if(camBusy) return; userStopped=!!camOn; camOn?stopCamera():startCamera(); }
+// app background se wapas aaye (ya phone lock/unlock) to camera stream mar jata hai -> chupchap restart
+document.addEventListener('visibilitychange',async()=>{
+  if(document.hidden||userStopped||activeTab!=='scan'||camBusy) return;
+  camBusy=true; try{ await stopCamera(); await startCamera(); }catch(e){} camBusy=false;
+});
 async function toggleTorch(){
   if(!camOn) return;
   try{ torchOn=!torchOn; await applyAdv({torch:torchOn}); document.getElementById('btn-torch').textContent=torchOn?'Flash ON':'Flash'; }
@@ -620,7 +627,7 @@ async function switchTab(t){
     document.getElementById('tab-'+x).classList.toggle('flex',x===t&&x==='scan');
     const b=document.getElementById('nav-'+x); b.classList.toggle('text-indigo-600',x===t); b.classList.toggle('text-slate-500',x!==t);
   });
-  if(t==='scan') startCamera(); else { await stopCamera(); }
+  if(t==='scan'&&!userStopped) startCamera();   // camera other tabs me bhi chalu rehta hai, band nahi hota
   if(t==='search'){ renderSearch(); renderHistory(); }
 }
 function openModal(t,b,ok){ document.getElementById('modal-title').textContent=t; document.getElementById('modal-body').textContent=b;
